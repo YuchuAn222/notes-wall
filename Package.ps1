@@ -1,4 +1,4 @@
-﻿param([string]$Version='1.0.0')
+﻿param([string]$Version='1.1.0')
 $ErrorActionPreference='Stop'
 if($Version -notmatch '^\d+\.\d+\.\d+([-.][a-zA-Z0-9.]+)?$'){throw 'Use a simple semantic version.'}
 & (Join-Path $PSScriptRoot 'Build.ps1')
