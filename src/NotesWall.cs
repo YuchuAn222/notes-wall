@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -19,8 +19,7 @@ class Choice {
  public Choice(string id,string name){Id=id;Name=name;}
 }
 static class WallUI {
- public static string[] ColorNames={"鹅黄","浅粉","雾蓝","薄荷","淡紫"};
- public static Brush Paper(string color){switch(color){case "pink":return UI.B("#F9E1E8");case "blue":return UI.B("#DFEBFA");case "mint":return UI.B("#DDEEE4");case "purple":return UI.B("#E8E0F5");default:return UI.B("#FFF0B8");}}
+ public static Brush Paper(string color){int i=Array.IndexOf(Planner.Palette,color);return UI.B(Planner.Hex[Math.Max(0,i)]);}
  public static ComboBox Combo(IEnumerable<object> options,int index){var c=new ComboBox{FontSize=13,MinHeight=34,Padding=new Thickness(6,3,6,3),VerticalContentAlignment=VerticalAlignment.Center};foreach(var x in options)c.Items.Add(x);c.SelectedIndex=index;return c;}
  public static List<Choice> Choices(Notebook n){return n.Topics.OrderBy(t=>Model.TopicPath(n,t.Id)).Select(t=>new Choice(t.Id,Model.TopicPath(n,t.Id))).ToList();}
  public static void Choose(ComboBox box,string id){foreach(var x in box.Items.OfType<Choice>())if(x.Id==id){box.SelectedItem=x;return;}if(box.Items.Count>0)box.SelectedIndex=0;}
@@ -38,8 +37,7 @@ class NoteEditor:Window {
   UI.Label(p,"内容");BodyBox=UI.Input(original==null?"":original.Body,true);BodyBox.Height=132;AutomationProperties.SetName(BodyBox,"便签内容");p.Children.Add(BodyBox);
   var line=new Grid{Margin=new Thickness(0,16,0,0)};line.ColumnDefinitions.Add(new ColumnDefinition{Width=new GridLength(115)});line.ColumnDefinitions.Add(new ColumnDefinition());
   KindBox=WallUI.Combo(Model.Kinds.Cast<object>(),Array.IndexOf(Model.Kinds,original==null?kind:original.Kind));line.Children.Add(KindBox);AutomationProperties.SetName(KindBox,"便签类型");
-  var colors=new StackPanel{Orientation=Orientation.Horizontal,HorizontalAlignment=HorizontalAlignment.Right};Grid.SetColumn(colors,1);line.Children.Add(colors);p.Children.Add(line);
-  Action renderColors=null;renderColors=delegate{colors.Children.Clear();for(int j=0;j<Model.Colors.Length;j++){string c=Model.Colors[j];var b=UI.Button("",delegate{Color=c;renderColors();},false);b.Background=WallUI.Paper(c);b.Width=29;b.Height=29;b.MinHeight=29;b.Padding=new Thickness(0);b.Margin=new Thickness(5,0,0,0);b.BorderBrush=c==Color?UI.Ink:UI.Line;b.BorderThickness=new Thickness(c==Color?2:1);b.ToolTip=WallUI.ColorNames[j];AutomationProperties.SetName(b,WallUI.ColorNames[j]+"便签");colors.Children.Add(b);}};renderColors();
+  var palette=DetailControls.Palette(Color,c=>Color=c);Grid.SetColumn(palette,1);line.Children.Add(palette);p.Children.Add(line);
   HasDate=new CheckBox{Content="记录日期 / 截止时间",Margin=new Thickness(0,20,0,9),IsChecked=original!=null&&original.DueUtc.HasValue};p.Children.Add(HasDate);
   var due=original!=null&&original.DueUtc.HasValue?original.DueUtc.Value.ToLocalTime():DateTime.Today.AddDays(1).AddHours(18);
   var dates=new Grid();dates.ColumnDefinitions.Add(new ColumnDefinition());dates.ColumnDefinitions.Add(new ColumnDefinition{Width=new GridLength(96)});
@@ -47,19 +45,31 @@ class NoteEditor:Window {
   TimeBox=UI.Input(due.ToString("HH:mm"),false);TimeBox.Padding=new Thickness(7);Grid.SetColumn(TimeBox,1);dates.Children.Add(TimeBox);AutomationProperties.SetName(TimeBox,"事项时间，24小时制");p.Children.Add(dates);
   var reminderRow=new Grid{Margin=new Thickness(0,12,0,0)};reminderRow.ColumnDefinitions.Add(new ColumnDefinition());reminderRow.ColumnDefinitions.Add(new ColumnDefinition{Width=new GridLength(150)});
   Remind=new CheckBox{Content="开启提醒",VerticalAlignment=VerticalAlignment.Center,IsChecked=original!=null&&original.ReminderOn};reminderRow.Children.Add(Remind);
-  var leads=new[]{new Choice("0","到时间提醒"),new Choice("10","提前 10 分钟"),new Choice("60","提前 1 小时"),new Choice("1440","提前 1 天")};LeadBox=WallUI.Combo(leads.Cast<object>(),0);
-  if(original!=null&&original.DueUtc.HasValue&&original.RemindUtc.HasValue){int lead=(int)Math.Round((original.DueUtc.Value-original.RemindUtc.Value).TotalMinutes);var match=leads.FirstOrDefault(x=>x.Id==lead.ToString());if(match!=null)LeadBox.SelectedItem=match;}
+  var leads=new[]{new Choice("0","到时间提醒"),new Choice("10","提前 10 分钟"),new Choice("60","提前 1 小时"),new Choice("1440","提前 1 天"),new Choice("120","提前 2 小时"),new Choice("10080","提前 7 天")};LeadBox=WallUI.Combo(leads.Cast<object>(),0);
+  if(original!=null && original.Alarms.Count>0){
+   foreach(var a in original.Alarms)if(!LeadBox.Items.Cast<Choice>().Any(c=>c.Id==a.Minutes.ToString()))LeadBox.Items.Add(new Choice(a.Minutes.ToString(),"原提醒偏移 "+a.Minutes+" 分钟"));
+   WallUI.Choose(LeadBox,original.Alarms[0].Minutes.ToString());
+  }
   Grid.SetColumn(LeadBox,1);reminderRow.Children.Add(LeadBox);p.Children.Add(reminderRow);
-  Action enabled=delegate{dates.IsEnabled=HasDate.IsChecked==true;reminderRow.IsEnabled=HasDate.IsChecked==true;LeadBox.IsEnabled=Remind.IsChecked==true;};HasDate.Checked+=delegate{enabled();};HasDate.Unchecked+=delegate{enabled();};Remind.Checked+=delegate{enabled();};Remind.Unchecked+=delegate{enabled();};enabled();
+  var extra=new WrapPanel();p.Children.Add(extra);extra.Children.Add(UI.Text("同时提醒  ",12,UI.Muted));
+  foreach(var option in LeadBox.Items.Cast<Choice>()){int m=int.Parse(option.Id);extra.Children.Add(new CheckBox{Content=option.Name,Tag=m,Margin=new Thickness(3),IsChecked=original!=null && original.Alarms.Skip(1).Any(a=>a.Minutes==m)});}
+  var draft=original==null?new Note():original.Clone();
+  var steps=new System.Collections.ObjectModel.ObservableCollection<Step>(draft.Steps);
+  var materials=new System.Collections.ObjectModel.ObservableCollection<Material>(draft.Materials);
+  DetailControls.Steps(p,steps);DetailControls.Materials(p,materials);
+  Action enabled=delegate{extra.IsEnabled=HasDate.IsChecked==true && Remind.IsChecked==true;dates.IsEnabled=HasDate.IsChecked==true;reminderRow.IsEnabled=HasDate.IsChecked==true;LeadBox.IsEnabled=Remind.IsChecked==true;};HasDate.Checked+=delegate{enabled();};HasDate.Unchecked+=delegate{enabled();};Remind.Checked+=delegate{enabled();};Remind.Unchecked+=delegate{enabled();};enabled();
   var hint=UI.Text("使用本机时间；提醒运行时需要电脑保持开机。",12,UI.Muted);hint.Margin=new Thickness(0,10,0,0);p.Children.Add(hint);
   var error=UI.Text("",12,UI.Red);error.Margin=new Thickness(0,10,0,0);p.Children.Add(error);TitleBox.TextChanged+=delegate{error.Text="";};TimeBox.TextChanged+=delegate{error.Text="";};DateBox.SelectedDateChanged+=delegate{error.Text="";};
   SaveButton=UI.Button("保存便签",delegate{
    if(string.IsNullOrWhiteSpace(TitleBox.Text)){error.Text="请写下便签标题。";TitleBox.Focus();return;}
-   DateTime? date=null,remind=null;bool remindOn=HasDate.IsChecked==true&&Remind.IsChecked==true;
-   if(HasDate.IsChecked==true){DateTime time;if(!DateBox.SelectedDate.HasValue||!DateTime.TryParseExact(TimeBox.Text.Trim(),new[]{"H:mm","HH:mm"},CultureInfo.InvariantCulture,DateTimeStyles.None,out time)){error.Text="请检查日期和时间，例如 18:30。";return;}date=DateBox.SelectedDate.Value.Date.Add(time.TimeOfDay).ToUniversalTime();if(remindOn){remind=date.Value.AddMinutes(-int.Parse(WallUI.Selected(LeadBox)));bool unchanged=original!=null&&original.ReminderOn&&original.DueUtc==date&&original.RemindUtc==remind;if(remind<=DateTime.UtcNow&&!unchanged){error.Text="提醒时间已经过去，可以取消提醒或选择未来的时间。";return;}}}
+   DateTime? date=null;bool remindOn=HasDate.IsChecked==true&&Remind.IsChecked==true;
+   if(HasDate.IsChecked==true){DateTime time;if(!DateBox.SelectedDate.HasValue||!DateTime.TryParseExact(TimeBox.Text.Trim(),new[]{"H:mm","HH:mm"},CultureInfo.InvariantCulture,DateTimeStyles.None,out time)){error.Text="请检查日期和时间，例如 18:30。";return;}date=DateBox.SelectedDate.Value.Date.Add(time.TimeOfDay).ToUniversalTime();}
+   if(materials.Any(m=>string.IsNullOrWhiteSpace(m.Name)||!DetailControls.ValidTarget(m.Target))){error.Text="请为资料填写名称和完整路径或网址。";return;}
+   if(steps.Any(v=>string.IsNullOrWhiteSpace(v.Name))){error.Text="请填写步骤名称或移除空行。";return;}
    Result=original==null?new Note():original.Clone();Result.Title=TitleBox.Text.Trim();Result.Body=BodyBox.Text.Trim();Result.TopicId=WallUI.Selected(TopicBox);Result.Kind=KindBox.SelectedItem.ToString();Result.Color=Color;Result.DueUtc=date;Result.ReminderOn=remindOn;
-   if(original!=null&&original.DueUtc==date&&original.ReminderOn==remindOn&&original.RemindUtc.HasValue&&remindOn&&original.RemindUtc.Value>original.DueUtc.Value){Result.RemindUtc=original.RemindUtc;}else Result.RemindUtc=remind;
-   if(original==null||original.RemindUtc!=Result.RemindUtc||original.ReminderOn!=remindOn)Result.Notified=false;
+   Result.Steps=steps.ToList();Result.Materials=materials.ToList();
+   var offsets=extra.Children.OfType<CheckBox>().Where(c=>c.IsChecked==true).Select(c=>(int)c.Tag).Concat(new[]{int.Parse(WallUI.Selected(LeadBox))});
+   Planner.Schedule(Result,original,offsets);
    DialogResult=true;
   },true);SaveButton.Margin=new Thickness(0,6,0,0);p.Children.Add(SaveButton);
   Loaded+=delegate{TitleBox.Focus();};PreviewKeyDown+=delegate(object s,KeyEventArgs e){if(e.Key==Key.Escape)Close();if(e.Key==Key.Enter&&(Keyboard.Modifiers&ModifierKeys.Control)!=0){SaveButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));e.Handled=true;}};
@@ -77,19 +87,19 @@ class TopicEditor:Window {
 }
 class WallReminder:Window {
  public Note Note;public Button SnoozeButton,DoneButton;
- public WallReminder(Note n,Notebook data,Action save){
+ public WallReminder(Note n,Alarm alarm,Notebook data,Action save){
   Note=n;UI.WindowStyle(this);Title="便签墙提醒";Width=380;SizeToContent=SizeToContent.Height;ResizeMode=ResizeMode.NoResize;Topmost=true;ShowInTaskbar=true;
   var p=new StackPanel{Margin=new Thickness(26)};Content=p;p.Children.Add(UI.Text(n.Kind+"提醒",18,UI.Ink));var title=UI.Text(n.Title,22,UI.Ink);title.MaxHeight=140;title.Margin=new Thickness(0,16,0,8);p.Children.Add(title);
   p.Children.Add(UI.Text(Model.TopicPath(data,n.TopicId),12,UI.Muted));if(n.Body!=""){var body=UI.Text(n.Body,14,UI.Muted);body.MaxHeight=100;body.Margin=new Thickness(0,12,0,0);p.Children.Add(body);}
   var date=UI.Text(n.DueUtc.HasValue?"事项时间 · "+n.DueUtc.Value.ToLocalTime().ToString("MM/dd HH:mm"):"提醒已到时间",13,UI.Muted);date.Margin=new Thickness(0,16,0,16);p.Children.Add(date);
   var buttons=new Grid();buttons.ColumnDefinitions.Add(new ColumnDefinition());buttons.ColumnDefinitions.Add(new ColumnDefinition());
-  SnoozeButton=UI.Button("10 分钟后提醒",delegate{Model.Snooze(n,DateTime.UtcNow);save();Close();},false);SnoozeButton.Margin=new Thickness(0,0,8,0);buttons.Children.Add(SnoozeButton);
-  DoneButton=UI.Button("标记完成",delegate{n.Done=true;save();Close();},true);Grid.SetColumn(DoneButton,1);buttons.Children.Add(DoneButton);p.Children.Add(buttons);
+  SnoozeButton=UI.Button("10 分钟后提醒",delegate{alarm.At=DateTime.UtcNow.AddMinutes(10);Planner.Sync(n);save();Close();},false);SnoozeButton.Margin=new Thickness(0,0,8,0);buttons.Children.Add(SnoozeButton);
+  DoneButton=UI.Button("标记完成",delegate{n.Done=true;save();Close();},true);Grid.SetColumn(DoneButton,1);buttons.Children.Add(DoneButton);p.Children.Add(buttons);p.Children.Add(UI.Button("我知道了",delegate{alarm.Acknowledged=true;Planner.Sync(n);save();Close();},false));
  }
 }
-class Wall:Window {
+partial class Wall:Window {
  public Notebook Data;public Store Storage;public TextBox Quick,Search;public ComboBox QuickKind,QuickTopic;public Button AddButton;public WrapPanel Cards;public TreeView Tree;
- public string Current="$all",CurrentColor="yellow";public TextBlock Status,Heading,Summary;public bool Testing;
+ public string Current="$all",CurrentColor="auto";public TextBlock Status,Heading,Summary;public bool Testing;
  Grid root,main;StackPanel nav;ScrollViewer cardScroll;DispatcherTimer ticker,draftTimer;F.NotifyIcon tray;EventWaitHandle showSignal,exitSignal;bool quitting,buildingTree,loaded,modal;Dictionary<string,WallReminder> popups=new Dictionary<string,WallReminder>();
  public Wall(Store store,bool test){
   Storage=store;Data=store.Load();Testing=test;Current=Data.SelectedTopic;if(!Current.StartsWith("$")&&!Data.Topics.Any(x=>x.Id==Current))Current="$all";
@@ -112,9 +122,10 @@ class Wall:Window {
   compose.Children.Add(UI.Text("写一张便签",13,UI.Ink));Quick=UI.Input(Data.Draft,true);Quick.Background=Brushes.Transparent;Quick.BorderThickness=new Thickness(0);Quick.Padding=new Thickness(0,8,0,8);Quick.Height=65;Quick.ToolTip="第一行作为标题，后面可以继续写内容；Ctrl+Enter 贴到墙上";AutomationProperties.SetName(Quick,"新便签内容");compose.Children.Add(Quick);
   var composeBar=new Grid();composeBar.ColumnDefinitions.Add(new ColumnDefinition());composeBar.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});
   var controls=new WrapPanel{VerticalAlignment=VerticalAlignment.Center};composeBar.Children.Add(controls);
-  var swatches=new StackPanel{Orientation=Orientation.Horizontal,Margin=new Thickness(0,0,10,0)};controls.Children.Add(swatches);Action swatch=null;swatch=delegate{swatches.Children.Clear();for(int j=0;j<Model.Colors.Length;j++){string c=Model.Colors[j];var b=UI.Button("",delegate{CurrentColor=c;composer.Background=WallUI.Paper(c);swatch();},false);b.Width=22;b.Height=22;b.MinHeight=22;b.Padding=new Thickness(0);b.Margin=new Thickness(0,0,5,0);b.BorderBrush=c==CurrentColor?UI.Ink:UI.B("#9B9587");b.BorderThickness=new Thickness(c==CurrentColor?2:1);b.Background=WallUI.Paper(c);b.ToolTip=WallUI.ColorNames[j];AutomationProperties.SetName(b,WallUI.ColorNames[j]+"便签");swatches.Children.Add(b);}};swatch();
+  var quickColor=DetailControls.Palette(CurrentColor,c=>{CurrentColor=c;composer.Background=WallUI.Paper(Planner.Color(Data,WallUI.Selected(QuickTopic),c));});
+  controls.Children.Add(quickColor);
   QuickKind=WallUI.Combo(Model.Kinds.Cast<object>(),0);QuickKind.MinWidth=70;QuickKind.Margin=new Thickness(0,0,6,0);QuickKind.MinHeight=30;controls.Children.Add(QuickKind);AutomationProperties.SetName(QuickKind,"新便签类型");
-  QuickTopic=WallUI.Combo(WallUI.Choices(Data).Cast<object>(),0);QuickTopic.MaxWidth=150;QuickTopic.MinWidth=100;QuickTopic.MinHeight=30;controls.Children.Add(QuickTopic);AutomationProperties.SetName(QuickTopic,"新便签主题");WallUI.Choose(QuickTopic,"inbox");
+  QuickTopic=WallUI.Combo(WallUI.Choices(Data).Cast<object>(),0);QuickTopic.MaxWidth=150;QuickTopic.MinWidth=100;QuickTopic.MinHeight=30;controls.Children.Add(QuickTopic);AutomationProperties.SetName(QuickTopic,"新便签主题");WallUI.Choose(QuickTopic,"inbox");QuickTopic.SelectionChanged+=delegate{composer.Background=WallUI.Paper(Planner.Color(Data,WallUI.Selected(QuickTopic),CurrentColor));};
   var actions=new StackPanel{Orientation=Orientation.Horizontal,Margin=new Thickness(8,0,0,0),VerticalAlignment=VerticalAlignment.Center};Grid.SetColumn(actions,1);composeBar.Children.Add(actions);
   var time=UI.Button("时间 / 提醒",delegate{EditNote(null,true);},false);time.MinHeight=32;time.Padding=new Thickness(9,5,9,5);time.Background=Brushes.Transparent;time.BorderThickness=new Thickness(0);actions.Children.Add(time);
   AddButton=UI.Button("贴到墙上",delegate{QuickAdd();},true);AddButton.MinHeight=32;actions.Children.Add(AddButton);compose.Children.Add(composeBar);
@@ -129,55 +140,55 @@ class Wall:Window {
   SizeChanged+=delegate{if(loaded&&WindowState==WindowState.Normal){Data.Width=Width;Data.Height=Height;}};
   PreviewKeyDown+=delegate(object s,KeyEventArgs e){if((Keyboard.Modifiers&ModifierKeys.Control)!=0&&e.Key==Key.N){EditNote(null,false);e.Handled=true;}if((Keyboard.Modifiers&ModifierKeys.Control)!=0&&e.Key==Key.F){Search.Focus();e.Handled=true;}};
  }
- void SetupTray(){tray=new F.NotifyIcon{Icon=new System.Drawing.Icon(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"wall.ico")),Text="便签墙 · 主题与提醒",Visible=true};tray.MouseClick+=delegate(object s,F.MouseEventArgs e){if(e.Button==F.MouseButtons.Left)Reveal();};var m=new F.ContextMenuStrip();m.Items.Add("打开便签墙",null,delegate{Reveal();});m.Items.Add("退出（停止提醒）",null,delegate{Quit();});tray.ContextMenuStrip=m;}
+ void SetupTray(){normalIcon=new System.Drawing.Icon(Path.Combine(AppDomain.CurrentDomain.BaseDirectory,"wall.ico"));tray=new F.NotifyIcon{Icon=normalIcon,Text="便签墙 · 主题与提醒",Visible=true};tray.MouseClick+=delegate(object s,F.MouseEventArgs e){if(e.Button==F.MouseButtons.Left){Reveal();if(Model.Due(Data,DateTime.UtcNow).Count>0)Select("$pending");}};var m=new F.ContextMenuStrip();m.Items.Add("打开便签墙",null,delegate{Reveal();});m.Items.Add("退出（停止提醒）",null,delegate{Quit();});tray.ContextMenuStrip=m;}
  public bool Save(){Data.SelectedTopic=Current;try{Storage.Save(Data);if(Status!=null){Status.Text="已保存 "+DateTime.Now.ToString("HH:mm");Status.Foreground=UI.Muted;Status.ToolTip=Storage.FilePath;}return true;}catch(Exception ex){if(Status!=null){Status.Text="保存失败 · 请导出备份";Status.Foreground=UI.Red;Status.ToolTip=ex.Message;}return false;}}
  public void Reveal(){Show();if(WindowState==WindowState.Minimized)WindowState=WindowState.Normal;Activate();}
  public void Quit(){if(!Save()){Reveal();MessageBox.Show(this,"内容未能保存，程序将保留运行。请先导出备份。","保存失败");return;}quitting=true;ticker.Stop();draftTimer.Stop();foreach(var p in popups.Values.ToList())p.Close();if(tray!=null)tray.Dispose();if(showSignal!=null)showSignal.Dispose();if(exitSignal!=null)exitSignal.Dispose();Close();Application.Current.Shutdown();}
  public void Select(string id){Current=id;Search.Clear();if(!id.StartsWith("$"))WallUI.Choose(QuickTopic,id);RenderAll();Save();}
  public void RenderAll(){RenderTree();RenderCards();}
  void RenderTree(){
-  buildingTree=true;try{nav.Children.Clear();string[] ids={"$all","$soon","$done","$trash"};string[] names={"全部便签","近期与逾期","已完成","回收站"};for(int k=0;k<ids.Length;k++){string id=ids[k];int count=Model.Visible(Data,id,"").Count;var b=UI.Button(names[k]+"    "+count,delegate{Select(id);},false);b.HorizontalContentAlignment=HorizontalAlignment.Left;b.BorderThickness=new Thickness(0);b.Background=Current==id?UI.B("#E7E7E4"):Brushes.Transparent;b.Margin=new Thickness(0,0,0,4);nav.Children.Add(b);}
+  buildingTree=true;try{nav.Children.Clear();PlannerNavigation();string[] ids={"$all","$soon","$done","$trash"};string[] names={"全部便签","近期与逾期","已完成","回收站"};for(int k=0;k<ids.Length;k++){string id=ids[k];int count=Model.Visible(Data,id,"").Count;var b=UI.Button(names[k]+"    "+count,delegate{Select(id);},false);b.HorizontalContentAlignment=HorizontalAlignment.Left;b.BorderThickness=new Thickness(0);b.Background=Current==id?UI.B("#E7E7E4"):Brushes.Transparent;b.Margin=new Thickness(0,0,0,4);nav.Children.Add(b);}
    Tree.Items.Clear();foreach(var t in Data.Topics.Where(x=>x.ParentId==""))Tree.Items.Add(TopicItem(t,0));
    var topicId=WallUI.Selected(QuickTopic);QuickTopic.Items.Clear();foreach(var c in WallUI.Choices(Data))QuickTopic.Items.Add(c);WallUI.Choose(QuickTopic,Current.StartsWith("$")?topicId:Current);
   }finally{buildingTree=false;}
  }
  TreeViewItem TopicItem(Topic t,int depth){
   var item=new TreeViewItem{Tag=t.Id,IsExpanded=true,Padding=new Thickness(2,5,0,5)};var header=new StackPanel{Orientation=Orientation.Horizontal};var text=UI.Text(t.Name,14,UI.Ink);text.MaxWidth=Math.Max(75,140-depth*12);text.TextTrimming=TextTrimming.CharacterEllipsis;text.TextWrapping=TextWrapping.NoWrap;header.Children.Add(text);var ids=Model.Descendants(Data,t.Id);int count=Data.Notes.Count(x=>!x.Deleted&&ids.Contains(x.TopicId));var number=UI.Text(count.ToString(),11,UI.Muted);number.Margin=new Thickness(9,2,0,0);header.Children.Add(number);item.Header=header;item.ToolTip=Model.TopicPath(Data,t.Id);item.IsSelected=Current==t.Id;
-  var cm=new ContextMenu();AddMenu(cm,"添加子主题",delegate{EditTopic(null,t.Id);});AddMenu(cm,"重命名",delegate{EditTopic(t,t.ParentId);});if(t.Id!="inbox")AddMenu(cm,"删除主题，便签移到未分类",delegate{if(MessageBox.Show(this,"删除“"+t.Name+"”及其子主题？其中便签会移到未分类。","删除主题",MessageBoxButton.YesNo)==MessageBoxResult.Yes){Model.DeleteTopic(Data,t.Id);Current=Data.SelectedTopic;Save();RenderAll();}});item.ContextMenu=cm;
+  var cm=new ContextMenu();AddMenu(cm,"添加子主题",delegate{EditTopic(null,t.Id);});AddMenu(cm,"重命名",delegate{EditTopic(t,t.ParentId);});if(t.Id!="inbox")AddMenu(cm,"删除主题，便签移到未分类",delegate{if(MessageBox.Show(this,"删除“"+t.Name+"”及其子主题？其中便签会移到未分类。","删除主题",MessageBoxButton.YesNo)==MessageBoxResult.Yes){Model.DeleteTopic(Data,t.Id);Current=Data.SelectedTopic;Save();RenderAll();}});var shades=new MenuItem{Header="主题默认色"};foreach(var c in new[]{"auto"}.Concat(Planner.Palette)){string key=c;var opt=new MenuItem{Header=key=="auto"?"继承上级":Planner.Names[Array.IndexOf(Planner.Palette,key)],IsChecked=t.Color==key};opt.Click+=delegate{t.Color=key;Save();RenderAll();};shades.Items.Add(opt);}cm.Items.Add(shades);item.ContextMenu=cm;
   item.AllowDrop=true;item.DragOver+=delegate(object s,DragEventArgs e){e.Effects=e.Data.GetDataPresent("NotesWall.Note")?DragDropEffects.Move:DragDropEffects.None;e.Handled=true;};item.Drop+=delegate(object s,DragEventArgs e){string id=e.Data.GetData("NotesWall.Note") as string;var note=Data.Notes.FirstOrDefault(x=>x.Id==id);if(note!=null){note.TopicId=t.Id;Save();RenderAll();}e.Handled=true;};
   foreach(var child in Data.Topics.Where(x=>x.ParentId==t.Id))item.Items.Add(TopicItem(child,depth+1));return item;
  }
  static void AddMenu(ContextMenu m,string name,Action action){var i=new MenuItem{Header=name};i.Click+=delegate{action();};m.Items.Add(i);}
  public void EditTopic(Topic original,string parent){modal=true;try{var dialog=new TopicEditor(Data,original,parent){Owner=this};if(dialog.ShowDialog()==true){if(original==null){var t=Model.AddTopic(Data,dialog.TopicName,dialog.ParentId);Current=t.Id;}else original.Name=dialog.TopicName;Save();RenderAll();}}finally{modal=false;}}
  public void QuickAdd(){if(string.IsNullOrWhiteSpace(Quick.Text)){Quick.Focus();return;}string[] lines=Quick.Text.Trim().Split(new[]{'\n'},2);var note=new Note{Title=lines[0].TrimEnd('\r'),Body=lines.Length>1?lines[1].Trim():"",TopicId=WallUI.Selected(QuickTopic),Kind=QuickKind.SelectedItem.ToString(),Color=CurrentColor};Data.Notes.Add(note);Quick.Clear();if(Current=="$done"||Current=="$trash"||Current=="$soon")Current=note.TopicId;Save();RenderAll();}
- public void EditNote(Note note,bool withDate){modal=true;try{string[] lines=Quick.Text.Trim().Split(new[]{'\n'},2);var d=new NoteEditor(Data,note,WallUI.Selected(QuickTopic),note==null?lines[0]:"",QuickKind.SelectedItem.ToString(),CurrentColor){Owner=this};if(note==null){if(lines.Length>1)d.BodyBox.Text=lines[1];if(withDate)d.HasDate.IsChecked=true;}
-  if(d.ShowDialog()==true){if(note==null){Data.Notes.Add(d.Result);Quick.Clear();if(Current=="$done"||Current=="$trash"||Current=="$soon"||(!Current.StartsWith("$")&&!Model.Descendants(Data,Current).Contains(d.Result.TopicId)))Current=d.Result.TopicId;}else{int index=Data.Notes.IndexOf(note);Data.Notes[index]=d.Result;if(popups.ContainsKey(note.Id))popups[note.Id].Close();}Save();RenderAll();}
+ public void EditNote(Note note,bool withDate,DateTime? day=null){modal=true;try{string[] lines=Quick.Text.Trim().Split(new[]{'\n'},2);var d=new NoteEditor(Data,note,WallUI.Selected(QuickTopic),note==null?lines[0]:"",QuickKind.SelectedItem.ToString(),CurrentColor){Owner=this};if(note==null){if(lines.Length>1)d.BodyBox.Text=lines[1];if(withDate)d.HasDate.IsChecked=true;if(day.HasValue){d.TitleBox.Clear();d.BodyBox.Clear();d.DateBox.SelectedDate=day.Value;if(scheduleTopic!="")WallUI.Choose(d.TopicBox,scheduleTopic);}}
+  if(d.ShowDialog()==true){if(note==null){Data.Notes.Add(d.Result);if(!day.HasValue)Quick.Clear();if(Current=="$done"||Current=="$trash"||Current=="$soon"||(!Current.StartsWith("$")&&!Model.Descendants(Data,Current).Contains(d.Result.TopicId)))Current=d.Result.TopicId;}else{int index=Data.Notes.IndexOf(note);Data.Notes[index]=d.Result;if(popups.ContainsKey(note.Id))popups[note.Id].Close();}Save();RenderAll();}
  }finally{modal=false;}}
  public void RenderCards(){
-  if(Cards==null)return;Cards.Children.Clear();var visible=Model.Visible(Data,Current,Search.Text.Trim());Heading.Text=Current=="$all"?"全部便签":Current=="$soon"?"近期与逾期":Current=="$done"?"已完成":Current=="$trash"?"回收站":Data.Topics.First(x=>x.Id==Current).Name;
+  if(Cards==null)return;if(RenderPlanner())return;Cards.Children.Clear();var visible=Model.Visible(Data,Current,Search.Text.Trim());Heading.Text=Current=="$all"?"全部便签":Current=="$soon"?"近期与逾期":Current=="$done"?"已完成":Current=="$trash"?"回收站":Data.Topics.First(x=>x.Id==Current).Name;
   int pending=visible.Count(x=>!x.Done);Summary.Text=(Current.StartsWith("$")?"":Model.TopicPath(Data,Current)+"  ·  ")+visible.Count+" 张便签 · "+pending+" 件未完成"+(Current=="$soon"?" · 未来 7 天及已逾期":"");
   if(visible.Count==0){var empty=new StackPanel{Margin=new Thickness(2,24,0,20)};empty.Children.Add(UI.Text(Search.Text.Trim()!=""?"没有找到符合的便签":Current=="$trash"?"回收站是空的":"给这面墙贴上第一张便签",20,UI.Ink));var hint=UI.Text(Search.Text.Trim()!=""?"试试其他关键词，或切换到全部便签。":"左侧添加主题或课程，再写下任务、作业和考试时间。",13,UI.Muted);hint.Margin=new Thickness(0,10,0,0);empty.Children.Add(hint);Cards.Children.Add(empty);return;}
   foreach(var n in visible)Cards.Children.Add(Card(n));FitCards();
  }
  FrameworkElement Card(Note n){
-  var paper=new Border{Background=WallUI.Paper(n.Color),CornerRadius=new CornerRadius(8),Margin=new Thickness(0,0,12,12),Padding=new Thickness(17,13,17,13),Height=246,Opacity=n.Done ? 0.76 : 1,Tag=n.Id};
+  var paper=new Border{Background=WallUI.Paper(Planner.Color(Data,n.TopicId,n.Color)),CornerRadius=new CornerRadius(8),Margin=new Thickness(0,0,12,12),Padding=new Thickness(17,13,17,13),MinHeight=246,Opacity=n.Done ? 0.76 : 1,Tag=n.Id};
   var grid=new Grid();paper.Child=grid;grid.RowDefinitions.Add(new RowDefinition{Height=GridLength.Auto});grid.RowDefinitions.Add(new RowDefinition());grid.RowDefinitions.Add(new RowDefinition{Height=GridLength.Auto});
   var top=new Grid();top.ColumnDefinitions.Add(new ColumnDefinition());top.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});var topic=UI.Text(n.Kind+" · "+Model.TopicPath(Data,n.TopicId),11,UI.Muted);topic.MaxHeight=32;topic.ToolTip=Model.TopicPath(Data,n.TopicId);top.Children.Add(topic);var menu=UI.Button("···",delegate(object s,RoutedEventArgs e){var b=(Button)s;b.ContextMenu=CardMenu(n);b.ContextMenu.IsOpen=true;},false);menu.MinHeight=22;menu.Padding=new Thickness(3,0,3,0);menu.Background=Brushes.Transparent;menu.BorderThickness=new Thickness(0);Grid.SetColumn(menu,1);top.Children.Add(menu);grid.Children.Add(top);
   Point dragStart=new Point();top.PreviewMouseLeftButtonDown+=delegate(object s,MouseButtonEventArgs e){dragStart=e.GetPosition(top);};top.MouseMove+=delegate(object s,MouseEventArgs e){if(e.LeftButton==MouseButtonState.Pressed&&Math.Abs((e.GetPosition(top)-dragStart).Length)>8)DragDrop.DoDragDrop(paper,new DataObject("NotesWall.Note",n.Id),DragDropEffects.Move);};
   var body=new StackPanel{Margin=new Thickness(0,12,0,8)};var title=UI.Text((n.Pinned?"置顶 · ":"")+n.Title,18,UI.Ink);title.MaxHeight=54;title.TextTrimming=TextTrimming.CharacterEllipsis;if(n.Done)title.TextDecorations=TextDecorations.Strikethrough;body.Children.Add(title);if(n.Body!=""){var content=UI.Text(n.Body,13,UI.Ink);content.MaxHeight=62;content.Margin=new Thickness(0,8,0,0);content.TextTrimming=TextTrimming.CharacterEllipsis;body.Children.Add(content);}body.Cursor=Cursors.Hand;body.MouseLeftButtonUp+=delegate{if(!n.Deleted)EditNote(n,false);};Grid.SetRow(body,1);grid.Children.Add(body);
-  var foot=new StackPanel();if(n.DueUtc.HasValue){bool overdue=n.DueUtc.Value<DateTime.UtcNow&&!n.Done;var d=UI.Text((overdue?"已过时间 · ":"时间 · ")+n.DueUtc.Value.ToLocalTime().ToString("MM/dd HH:mm"),12,overdue?UI.Red:UI.Ink);d.Margin=new Thickness(0,0,0,6);foot.Children.Add(d);}
-  if(n.ReminderOn&&!n.Done){var r=UI.Text(n.Notified?"本次已提醒":"提醒 · "+(n.RemindUtc.HasValue?n.RemindUtc.Value.ToLocalTime().ToString("MM/dd HH:mm"):"未设置"),11,UI.Muted);r.Margin=new Thickness(0,0,0,8);foot.Children.Add(r);}
+  var foot=new StackPanel();AddProgressAndMaterials(foot,n);if(n.DueUtc.HasValue){bool overdue=n.DueUtc.Value<DateTime.UtcNow&&!n.Done;var d=UI.Text((overdue?"已过时间 · ":"时间 · ")+n.DueUtc.Value.ToLocalTime().ToString("MM/dd HH:mm"),12,overdue?UI.Red:UI.Ink);d.Margin=new Thickness(0,0,0,6);foot.Children.Add(d);}
+  if(n.ReminderOn&&!n.Done){var r=UI.Text(n.Notified?"提醒均已确认":"提醒 · "+(n.RemindUtc.HasValue?n.RemindUtc.Value.ToLocalTime().ToString("MM/dd HH:mm"):"未设置"),11,UI.Muted);r.Margin=new Thickness(0,0,0,8);foot.Children.Add(r);}
   var bottom=new Grid();bottom.ColumnDefinitions.Add(new ColumnDefinition());bottom.ColumnDefinitions.Add(new ColumnDefinition{Width=GridLength.Auto});
   if(!n.Deleted){var done=new CheckBox{Content=n.Done?"已完成":"标记完成",IsChecked=n.Done,FontSize=12,VerticalAlignment=VerticalAlignment.Center};AutomationProperties.SetName(done,"完成："+n.Title);done.Click+=delegate{n.Done=done.IsChecked==true;if(popups.ContainsKey(n.Id))popups[n.Id].Close();Save();RenderAll();};bottom.Children.Add(done);}
   var edit=UI.Button(n.Deleted?"恢复":"编辑",delegate{if(n.Deleted){n.Deleted=false;Save();RenderAll();}else EditNote(n,false);},false);edit.MinHeight=23;edit.Padding=new Thickness(5,1,5,1);edit.BorderThickness=new Thickness(0);edit.Background=Brushes.Transparent;Grid.SetColumn(edit,1);bottom.Children.Add(edit);foot.Children.Add(bottom);Grid.SetRow(foot,2);grid.Children.Add(foot);return paper;
  }
  ContextMenu CardMenu(Note n){var cm=new ContextMenu();if(n.Deleted){AddMenu(cm,"恢复便签",delegate{n.Deleted=false;Save();RenderAll();});return cm;}AddMenu(cm,"编辑",delegate{EditNote(n,false);});AddMenu(cm,n.Pinned?"取消置顶":"置顶",delegate{n.Pinned=!n.Pinned;Save();RenderCards();});var move=new MenuItem{Header="移动到主题"};foreach(var t in WallUI.Choices(Data)){var target=t;var i=new MenuItem{Header=t.Name,IsChecked=n.TopicId==t.Id};i.Click+=delegate{n.TopicId=target.Id;Save();RenderAll();};move.Items.Add(i);}cm.Items.Add(move);AddMenu(cm,"移到回收站",delegate{n.Deleted=true;if(popups.ContainsKey(n.Id))popups[n.Id].Close();Save();RenderAll();});return cm;}
  void FitCards(){if(cardScroll==null||Cards==null||Cards.Children.Count==0)return;double available=Math.Max(250,cardScroll.ActualWidth-18);int columns=Math.Max(1,(int)(available/258));Cards.ItemWidth=Math.Floor(available/columns);}
- ContextMenu SettingsMenu(){var cm=new ContextMenu();AddMenu(cm,"导出完整备份…",Export);AddMenu(cm,"导入备份（追加缺少的内容）…",Import);AddMenu(cm,"打开数据文件夹",delegate{Process.Start(new ProcessStartInfo(Path.GetDirectoryName(Storage.FilePath)){UseShellExecute=true});});var sound=new MenuItem{Header="提醒时播放声音",IsCheckable=true,IsChecked=Data.Sound};sound.Click+=delegate{Data.Sound=sound.IsChecked;Save();};cm.Items.Add(sound);AddMenu(cm,"退出软件（停止提醒）",Quit);return cm;}
+ ContextMenu SettingsMenu(){var cm=new ContextMenu();AddStartupSetting(cm);AddMenu(cm,"导出完整备份…",Export);AddMenu(cm,"导入备份（追加缺少的内容）…",Import);AddMenu(cm,"打开数据文件夹",delegate{Process.Start(new ProcessStartInfo(Path.GetDirectoryName(Storage.FilePath)){UseShellExecute=true});});var sound=new MenuItem{Header="提醒时播放声音",IsCheckable=true,IsChecked=Data.Sound};sound.Click+=delegate{Data.Sound=sound.IsChecked;Save();};cm.Items.Add(sound);AddMenu(cm,"退出软件（停止提醒）",Quit);return cm;}
  void Export(){modal=true;try{var dialog=new Microsoft.Win32.SaveFileDialog{Filter="便签墙备份 (*.xml)|*.xml",FileName="便签墙备份_"+DateTime.Now.ToString("yyyyMMdd")+".xml"};if(dialog.ShowDialog(this)==true){if(Path.GetFullPath(dialog.FileName).Equals(Path.GetFullPath(Storage.FilePath),StringComparison.OrdinalIgnoreCase))return;using(var f=File.Create(dialog.FileName))new System.Xml.Serialization.XmlSerializer(typeof(Notebook)).Serialize(f,Data);Status.Text="备份已导出";}}catch(Exception ex){MessageBox.Show(this,"导出失败："+ex.Message);}finally{modal=false;}}
  void Import(){modal=true;try{var d=new Microsoft.Win32.OpenFileDialog{Filter="便签墙备份 (*.xml)|*.xml"};if(d.ShowDialog(this)==true){var incoming=Store.Read(d.FileName);int count=Merge(incoming);Save();RenderAll();MessageBox.Show(this,"已追加 "+count+" 张便签；已有同一张便签保持当前版本。","导入完成");}}catch(Exception ex){MessageBox.Show(this,"无法导入："+ex.Message);}finally{modal=false;}}
- public int Merge(Notebook incoming){var merged=Model.Merged(Data,incoming);int count=merged.Notes.Count-Data.Notes.Count;Data=merged;return count;}
- public void CheckReminders(){if(modal)return;foreach(var n in Model.Due(Data,DateTime.UtcNow).Take(Math.Max(0,3-popups.Count))){n.Notified=true;if(!Save()){n.Notified=false;return;}var popup=new WallReminder(n,Data,delegate{Save();RenderAll();});popups[n.Id]=popup;popup.Closed+=delegate{popups.Remove(n.Id);};popup.WindowStartupLocation=WindowStartupLocation.CenterScreen;popup.Show();if(Data.Sound&&!Testing)System.Media.SystemSounds.Asterisk.Play();RenderCards();}}
+ public int Merge(Notebook incoming){var merged=Model.Merged(Data,incoming);int count=merged.Notes.Count-Data.Notes.Count;foreach(var popup in popups.Values.ToList())popup.Close();Data=merged;return count;}
+ public void CheckReminders(){RefreshAlarms();}
 }
 static class WallProgram {
  [STAThread]public static int Main(string[] args){
@@ -185,11 +196,18 @@ static class WallProgram {
   if(args.Length>=2&&args[0]=="--self-test")return Checks.Core(args[1]);if(args.Length>=2&&args[0]=="--ui-test")return Checks.Visual(args[1]);
   if(args.Contains("--exit")){try{using(var e=EventWaitHandle.OpenExisting("Local\\YuChuanNotesWallExit"))e.Set();}catch{}return 0;}
   bool created;using(var mutex=new Mutex(true,"Local\\YuChuanNotesWall",out created)){
-   if(!created){try{using(var e=EventWaitHandle.OpenExisting("Local\\YuChuanNotesWallShow"))e.Set();}catch{}return 0;}
+   if(!created){if(args.Contains("--tray"))return 0;try{using(var e=EventWaitHandle.OpenExisting("Local\\YuChuanNotesWallShow"))e.Set();}catch{}return 0;}
    try{
     var dir=AppDomain.CurrentDomain.BaseDirectory;var store=new Store(Path.Combine(dir,"data"));var data=store.Load();
     if(!data.LegacyImported){var legacy=Path.GetFullPath(Path.Combine(dir,"..","GPT便利贴","data","notes.xml"));var backup=Path.Combine(dir,"data","旧版便签_迁移前.xml");if(File.Exists(legacy)&&!File.Exists(backup))File.Copy(legacy,backup,false);Model.ImportLegacy(data,legacy);store.Save(data);}
-    var app=new Application{ShutdownMode=ShutdownMode.OnExplicitShutdown};app.DispatcherUnhandledException+=delegate(object s,DispatcherUnhandledExceptionEventArgs e){MessageBox.Show("操作未完成："+e.Exception.Message,"便签墙");e.Handled=true;};app.Run(new Wall(store,false));return 0;
+    if(data.SchemaVersion<11){
+     if(File.Exists(store.FilePath)){
+      string copy=Path.Combine(Path.GetDirectoryName(store.FilePath),"wall-before-v1.1-"+DateTime.UtcNow.ToString("yyyyMMddHHmmssfff")+".xml");
+      File.Copy(store.FilePath,copy);
+     }
+     data.SchemaVersion=11;store.Save(data);
+    }
+    var app=new Application{ShutdownMode=ShutdownMode.OnExplicitShutdown};app.DispatcherUnhandledException+=delegate(object s,DispatcherUnhandledExceptionEventArgs e){MessageBox.Show("操作未完成："+e.Exception.Message,"便签墙");e.Handled=true;};var window=new Wall(store,false);if(args.Contains("--tray")){window.ShowActivated=false;window.Loaded+=delegate{window.Hide();};}app.Run(window);return 0;
    }catch(Exception ex){MessageBox.Show(ex.Message,"便签墙未能打开");return 1;}
   }
  }

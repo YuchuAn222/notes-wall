@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -33,6 +33,41 @@ static class Checks {
   }catch(Exception ex){report.Add("FAIL "+ex);File.WriteAllLines(Path.Combine(dir,"core-test.txt"),report,Encoding.UTF8);return 1;}
  }
  static IEnumerable<T> Desc<T>(DependencyObject node)where T:DependencyObject{if(node is T)yield return (T)node;for(int i=0;i<VisualTreeHelper.GetChildrenCount(node);i++)foreach(var child in Desc<T>(VisualTreeHelper.GetChild(node,i)))yield return child;}
+ static void VerifyPlanner(Wall wall,string dir,Action<bool,string> check){
+   var now=DateTime.UtcNow;
+   var contest=Model.AddTopic(wall.Data,"样例比赛","contests");contest.Color="aqua";
+   var test=new Note{Title="测试作品提交",TopicId=contest.Id,Color="auto",DueUtc=now.AddDays(2),ReminderOn=true};
+   for(int i=1;i<=4;i++)test.Steps.Add(new Step{Name="步骤 "+i,Done=i<4});
+   string path=Path.Combine(dir,"materials.txt");File.WriteAllText(path,"source");
+   test.Materials.Add(new Material{Name="作品原件",Target=path});
+   test.Materials.Add(new Material{Name="报名入口",Target="https://example.org/contest"});
+   Planner.Schedule(test,null,new[]{10080,1440,120});
+   wall.Data.Notes.Add(test);
+   try{
+    check(Planner.Color(wall.Data,test.TopicId,test.Color)=="aqua"&&Planner.Progress(test).Contains("3/4"),"Theme inheritance and next incomplete step");
+    var editor=new NoteEditor(wall.Data,test,contest.Id,"","比赛","auto"){Owner=wall};
+    editor.Loaded+=delegate{editor.DateBox.SelectedDate=test.DueUtc.Value.ToLocalTime().AddDays(4).Date;editor.SaveButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));};
+    check(editor.ShowDialog()==true && editor.Result.Alarms.Count==3 && editor.Result.Materials.Count==2 && editor.Result.Steps.Count==4,"Competition editor retains four steps, three alarms and two materials on date change");
+    var rescheduled=editor.Result;
+
+    check(rescheduled.Alarms.All(a=>a.At==rescheduled.DueUtc.Value.AddMinutes(-a.Minutes))&&Planner.Day(new[]{rescheduled},test.DueUtc.Value.ToLocalTime()).Count==0&&Planner.Day(new[]{rescheduled},rescheduled.DueUtc.Value.ToLocalTime()).Count==1,"Rescheduled exam/contest moves to its new date in both planners");
+    test.Steps[3].Done=true;check(!test.Done&&Planner.Progress(test).Contains("4/4"),"All steps checked still requires explicit task completion");
+    DetailControls.Open(test.Materials[0],target=>File.AppendAllText(target," edited"));check(File.ReadAllText(path)=="source edited","Material dispatch targets the editable original file");
+    wall.Width=1160;wall.Height=800;wall.Select("$week");wall.UpdateLayout();UI.Capture((FrameworkElement)wall.Content,Path.Combine(dir,"week.png"));
+    wall.Select("$month");wall.UpdateLayout();UI.Capture((FrameworkElement)wall.Content,Path.Combine(dir,"month.png"));
+    check(wall.PlannerContent!=null,"Week and month render at the normal navigation entrypoints");
+    foreach(var alarm in test.Alarms)alarm.At=now.AddMinutes(-1-alarm.Minutes);
+    wall.RefreshAlarms(true);wall.CheckReminders();
+    var digests=Application.Current.Windows.Cast<Window>().Where(w=>w.Title=="便签墙提醒").ToList();
+    check(digests.Count==1,"Three missed alarms produce one summary across repeated ticks");digests[0].Close();
+    wall.Select("$pending");check(wall.Summary.Text.StartsWith("1 件")&&Planner.Pending(test,now).Count()==3,"Dismissing summary keeps one note with three pending alarm nodes");
+    test.Alarms[0].Acknowledged=true;
+    test.Alarms[1].At=now.AddMinutes(10);Planner.Sync(test);
+    check(Planner.Pending(test,now).Count()==1&&!test.Alarms[2].Acknowledged,"Acknowledging and snoozing individual nodes preserve remaining alarms");
+    wall.Save();var restored=wall.Storage.Load().Notes.First(n=>n.Id==test.Id);
+    check(restored.Steps.Count==4&&restored.Materials.Count==2&&restored.Materials[0].Target==path&&restored.Alarms.Count==3&&restored.Alarms[0].Acknowledged,"XML round trip restores checklist, source paths and independent reminder states");
+   }finally{wall.Data.Notes.Remove(test);wall.Data.Topics.Remove(contest);wall.Select("$all");}
+ }
  public static int Visual(string dir){
   Directory.CreateDirectory(dir);var report=new List<string>();int code=0;var app=new Application{ShutdownMode=ShutdownMode.OnExplicitShutdown};app.DispatcherUnhandledException+=delegate(object sender,DispatcherUnhandledExceptionEventArgs e){File.WriteAllText(Path.Combine(dir,"dispatcher-error.txt"),e.Exception.ToString());e.Handled=true;code=1;app.Shutdown();};var store=new Store(Path.Combine(dir,"ui-data"));var wall=new Wall(store,true);wall.Data.Notes.Clear();
   wall.Loaded+=delegate{wall.Dispatcher.BeginInvoke(new Action(delegate{try{
@@ -47,8 +82,8 @@ static class Checks {
    wall.Search.Text="神经网络";check(wall.Cards.Children.Count==2,"Search filters note cards across title and body");wall.Search.Clear();wall.RenderAll();wall.UpdateLayout();UI.Capture((FrameworkElement)wall.Content,Path.Combine(dir,"wall.png"));
    wall.Select(course.Id);wall.UpdateLayout();UI.Capture((FrameworkElement)wall.Content,Path.Combine(dir,"course.png"));wall.Select("$all");wall.Width=960;wall.Height=680;wall.UpdateLayout();UI.Capture((FrameworkElement)wall.Content,Path.Combine(dir,"medium.png"));wall.Width=780;wall.Height=600;wall.UpdateLayout();UI.Capture((FrameworkElement)wall.Content,Path.Combine(dir,"compact.png"));
    card=wall.Cards.Children.OfType<Border>().First(x=>(string)x.Tag==task.Id);var more=Desc<Button>(card).First(x=>x.Content as string=="···");more.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));var trash=more.ContextMenu.Items.OfType<MenuItem>().First(x=>(string)x.Header=="移到回收站");more.ContextMenu.IsOpen=false;trash.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));check(task.Deleted&&Model.Visible(wall.Data,"$trash","").Count==1,"Card menu moves note to recoverable trash");wall.Select("$trash");wall.UpdateLayout();card=wall.Cards.Children.OfType<Border>().First();var restore=Desc<Button>(card).First(x=>x.Content as string=="恢复");restore.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));check(!task.Deleted,"Restore button recovers trashed note");
-   var alarm=new Note{Title="提醒窗口验证",TopicId=course.Id,Kind="作业",DueUtc=DateTime.UtcNow.AddHours(1),RemindUtc=DateTime.UtcNow.AddSeconds(-1),ReminderOn=true};wall.Data.Notes.Add(alarm);wall.CheckReminders();var popup=app.Windows.OfType<WallReminder>().First();popup.UpdateLayout();UI.Capture((FrameworkElement)popup.Content,Path.Combine(dir,"reminder.png"));var deadline=alarm.DueUtc;popup.SnoozeButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));check(alarm.DueUtc==deadline&&alarm.RemindUtc>DateTime.UtcNow.AddMinutes(9),"Reminder snooze button preserves original deadline");alarm.RemindUtc=DateTime.UtcNow.AddSeconds(-1);wall.CheckReminders();app.Windows.OfType<WallReminder>().First().DoneButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));check(alarm.Done,"Reminder complete button updates task");
-   wall.Quick.Text="没有贴上墙的临时想法";check(wall.Save()&&store.Load().Draft==wall.Quick.Text,"Unposted draft persists to disk");check(store.Load().Notes.Count==7,"All note and category changes survive reload");
+   var alarm=new Note{Title="提醒窗口验证",TopicId=course.Id,Kind="作业",DueUtc=DateTime.UtcNow.AddHours(1),RemindUtc=DateTime.UtcNow.AddSeconds(-1),ReminderOn=true};wall.Data.Notes.Add(alarm);wall.CheckReminders();var popup=app.Windows.OfType<WallReminder>().First();popup.UpdateLayout();UI.Capture((FrameworkElement)popup.Content,Path.Combine(dir,"reminder.png"));var deadline=alarm.DueUtc;popup.SnoozeButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));check(alarm.DueUtc==deadline&&alarm.RemindUtc>DateTime.UtcNow.AddMinutes(9),"Reminder snooze button preserves original deadline");alarm.Alarms[0].At=DateTime.UtcNow.AddSeconds(-1);Planner.Sync(alarm);wall.CheckReminders();app.Windows.OfType<WallReminder>().First().DoneButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));check(alarm.Done,"Reminder complete button updates task");
+   VerifyPlanner(wall,dir,check);wall.Quick.Text="没有贴上墙的临时想法";check(wall.Save()&&store.Load().Draft==wall.Quick.Text,"Unposted draft persists to disk");check(store.Load().Notes.Count==7,"All note and category changes survive reload");
   }catch(Exception ex){code=1;report.Add("FAIL "+ex);}finally{File.WriteAllLines(Path.Combine(dir,"ui-test.txt"),report,Encoding.UTF8);app.Shutdown();}}),DispatcherPriority.ApplicationIdle);};
   app.Run(wall);return code;
  }

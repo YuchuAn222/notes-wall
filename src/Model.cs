@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -7,6 +7,7 @@ using System.Xml.Serialization;
 
 [Serializable] public class Topic {
  public string Id=Guid.NewGuid().ToString("N"), Name="", ParentId="";
+ public string Color="auto";
  public override string ToString(){return Name;}
 }
 [Serializable] public class Note {
@@ -14,12 +15,22 @@ using System.Xml.Serialization;
  public bool Done, Notified, Pinned, Deleted, ReminderOn;
  public DateTime? DueUtc, RemindUtc;
  public DateTime CreatedUtc=DateTime.UtcNow;
- public Note Clone(){return (Note)MemberwiseClone();}
+ public List<Step> Steps=new List<Step>();
+ public List<Material> Materials=new List<Material>();
+ public List<Alarm> Alarms=new List<Alarm>();
+ public Note Clone(){
+  var copy=(Note)MemberwiseClone();
+  copy.Steps=Steps.Select(s=>new Step{Name=s.Name,Done=s.Done}).ToList();
+  copy.Materials=Materials.Select(m=>new Material{Name=m.Name,Target=m.Target}).ToList();
+  copy.Alarms=Alarms.Select(a=>a.Copy()).ToList();
+  return copy;
+ }
 }
 [Serializable] public class Notebook {
  public List<Note> Notes=new List<Note>();
  public List<Topic> Topics=new List<Topic>();
  public string Draft="", SelectedTopic="$all";
+ public int SchemaVersion;
  public bool Sound=true, LegacyImported;
  public double Width=1160, Height=800;
 }
@@ -45,7 +56,7 @@ public class Store {
  }
 }
 static class Model {
- public static readonly string[] Colors={"yellow","pink","blue","mint","purple"};
+ public static readonly string[] Colors=Planner.Palette;
  public static readonly string[] Kinds={"便签","作业","考试","比赛","提醒"};
  public static void Normalize(Notebook n){
   if(n.Notes==null)n.Notes=new List<Note>();if(n.Topics==null)n.Topics=new List<Topic>();
@@ -55,7 +66,7 @@ static class Model {
   foreach(var t in n.Topics){if(t.ParentId==null)t.ParentId="";if(t.ParentId!=""&&!n.Topics.Any(x=>x.Id==t.ParentId))t.ParentId="";}
   foreach(var t in n.Topics){var seen=new HashSet<string>{t.Id};var parent=t.ParentId;while(parent!=""){if(!seen.Add(parent))throw new InvalidDataException("主题之间形成循环。");parent=n.Topics.First(x=>x.Id==parent).ParentId;}}
   if(n.Notes.GroupBy(x=>x.Id).Any(g=>g.Count()>1))throw new InvalidDataException("便签标识重复。");
-  foreach(var x in n.Notes){if(string.IsNullOrEmpty(x.Id))x.Id=Guid.NewGuid().ToString("N");x.Title=x.Title??"";x.Body=x.Body??"";if(!n.Topics.Any(t=>t.Id==x.TopicId))x.TopicId="inbox";if(!Colors.Contains(x.Color))x.Color="yellow";if(!Kinds.Contains(x.Kind))x.Kind="便签";}
+  foreach(var x in n.Notes){if(string.IsNullOrEmpty(x.Id))x.Id=Guid.NewGuid().ToString("N");x.Title=x.Title??"";x.Body=x.Body??"";if(!n.Topics.Any(t=>t.Id==x.TopicId))x.TopicId="inbox";Planner.Upgrade(x);if(x.Color!="auto"&&!Colors.Contains(x.Color))x.Color="yellow";if(!Kinds.Contains(x.Kind))x.Kind="便签";}
  }
  public static HashSet<string> Descendants(Notebook n,string id){var ids=new HashSet<string>{id};bool more;do{more=false;foreach(var t in n.Topics)if(ids.Contains(t.ParentId)&&ids.Add(t.Id))more=true;}while(more);return ids;}
  public static string TopicPath(Notebook n,string id){var names=new List<string>();var seen=new HashSet<string>();while(!string.IsNullOrEmpty(id)&&seen.Add(id)){var t=n.Topics.FirstOrDefault(x=>x.Id==id);if(t==null)break;names.Add(t.Name);id=t.ParentId;}names.Reverse();return string.Join(" / ",names);}
@@ -67,11 +78,11 @@ static class Model {
   if(!string.IsNullOrWhiteSpace(search))q=q.Where(x=>(x.Title+"\n"+x.Body+"\n"+x.Kind+"\n"+TopicPath(n,x.TopicId)).IndexOf(search,StringComparison.OrdinalIgnoreCase)>=0);
   return q.OrderByDescending(x=>x.Pinned).ThenBy(x=>x.Done).ThenBy(x=>x.DueUtc??DateTime.MaxValue).ThenByDescending(x=>x.CreatedUtc).ToList();
  }
- public static List<Note> Due(Notebook n,DateTime now){return n.Notes.Where(x=>!x.Deleted&&!x.Done&&x.ReminderOn&&!x.Notified&&x.RemindUtc.HasValue&&x.RemindUtc.Value<=now).OrderBy(x=>x.RemindUtc).ToList();}
- public static void Snooze(Note n,DateTime now){n.RemindUtc=now.AddMinutes(10);n.Notified=false;n.ReminderOn=true;}
+ public static List<Note> Due(Notebook n,DateTime now){return n.Notes.Where(x=>Planner.Pending(x,now).Any()).ToList();}
+ public static void Snooze(Note n,DateTime now){Planner.Upgrade(n);var alarm=Planner.Pending(n,now).First();alarm.At=now.AddMinutes(10);Planner.Sync(n);}
  public static Notebook Merged(Notebook current,Notebook incoming){
-  var candidate=new Notebook{Notes=current.Notes.Select(x=>x.Clone()).ToList(),Topics=current.Topics.Select(x=>new Topic{Id=x.Id,Name=x.Name,ParentId=x.ParentId}).ToList(),Draft=current.Draft,SelectedTopic=current.SelectedTopic,Sound=current.Sound,LegacyImported=current.LegacyImported,Width=current.Width,Height=current.Height};
-  foreach(var t in incoming.Topics)if(!candidate.Topics.Any(x=>x.Id==t.Id))candidate.Topics.Add(new Topic{Id=t.Id,Name=t.Name,ParentId=t.ParentId});
+  var candidate=new Notebook{Notes=current.Notes.Select(x=>x.Clone()).ToList(),Topics=current.Topics.Select(x=>new Topic{Id=x.Id,Name=x.Name,ParentId=x.ParentId,Color=x.Color}).ToList(),Draft=current.Draft,SelectedTopic=current.SelectedTopic,SchemaVersion=current.SchemaVersion,Sound=current.Sound,LegacyImported=current.LegacyImported,Width=current.Width,Height=current.Height};
+  foreach(var t in incoming.Topics)if(!candidate.Topics.Any(x=>x.Id==t.Id))candidate.Topics.Add(new Topic{Id=t.Id,Name=t.Name,ParentId=t.ParentId,Color=t.Color});
   foreach(var note in incoming.Notes)if(!candidate.Notes.Any(x=>x.Id==note.Id))candidate.Notes.Add(note.Clone());
   Normalize(candidate);return candidate;
  }
