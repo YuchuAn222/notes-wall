@@ -1,0 +1,28 @@
+# Personal notes, drafts, backups and local runtime state
+data/
+**/data/
+*.xml
+*.bak
+*.unreadable-*
+*.tmp
+*.log
+
+# Generated builds and tests
+dist/
+.test-output/
+.package-stage/
+*.exe
+*.pdb
+*.user
+.vs/
+
+# Local environments and credentials
+.env
+.env.*
+!.env.example
+Thumbs.db
+Desktop.ini
+
+# Only deliberately prepared, data-free ZIP releases are versioned
+*.zip
+!releases/NotesWall-*-win-x64.zip
