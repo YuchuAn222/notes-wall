@@ -30,6 +30,8 @@ using System.Xml.Serialization;
  public List<Note> Notes=new List<Note>();
  public List<Topic> Topics=new List<Topic>();
  public string Draft="", SelectedTopic="$all";
+ public string SortOrder="smart",KindFilter="全部类型";
+ public bool OnlyOpen;
  public int SchemaVersion;
  public bool Sound=true, LegacyImported;
  public double Width=1160, Height=800;
@@ -75,13 +77,13 @@ static class Model {
  public static List<Note> Visible(Notebook n,string view,string search){
   var now=DateTime.UtcNow;IEnumerable<Note> q=n.Notes;
   if(view=="$trash")q=q.Where(x=>x.Deleted);else{q=q.Where(x=>!x.Deleted);if(view=="$done")q=q.Where(x=>x.Done);else if(view=="$soon")q=q.Where(x=>!x.Done&&x.DueUtc.HasValue&&x.DueUtc.Value<=now.AddDays(7));else if(!view.StartsWith("$")){var ids=Descendants(n,view);q=q.Where(x=>ids.Contains(x.TopicId));}}
-  if(!string.IsNullOrWhiteSpace(search))q=q.Where(x=>(x.Title+"\n"+x.Body+"\n"+x.Kind+"\n"+TopicPath(n,x.TopicId)).IndexOf(search,StringComparison.OrdinalIgnoreCase)>=0);
+  if(!string.IsNullOrWhiteSpace(search))q=q.Where(x=>(x.Title+"\n"+x.Body+"\n"+x.Kind+"\n"+TopicPath(n,x.TopicId)+"\n"+string.Join("\n",x.Steps.Select(v=>v.Name).Concat(x.Materials.Select(v=>v.Name)).ToArray())).IndexOf(search,StringComparison.OrdinalIgnoreCase)>=0);
   return q.OrderByDescending(x=>x.Pinned).ThenBy(x=>x.Done).ThenBy(x=>x.DueUtc??DateTime.MaxValue).ThenByDescending(x=>x.CreatedUtc).ToList();
  }
  public static List<Note> Due(Notebook n,DateTime now){return n.Notes.Where(x=>Planner.Pending(x,now).Any()).ToList();}
  public static void Snooze(Note n,DateTime now){Planner.Upgrade(n);var alarm=Planner.Pending(n,now).First();alarm.At=now.AddMinutes(10);Planner.Sync(n);}
  public static Notebook Merged(Notebook current,Notebook incoming){
-  var candidate=new Notebook{Notes=current.Notes.Select(x=>x.Clone()).ToList(),Topics=current.Topics.Select(x=>new Topic{Id=x.Id,Name=x.Name,ParentId=x.ParentId,Color=x.Color}).ToList(),Draft=current.Draft,SelectedTopic=current.SelectedTopic,SchemaVersion=current.SchemaVersion,Sound=current.Sound,LegacyImported=current.LegacyImported,Width=current.Width,Height=current.Height};
+  var candidate=new Notebook{Notes=current.Notes.Select(x=>x.Clone()).ToList(),Topics=current.Topics.Select(x=>new Topic{Id=x.Id,Name=x.Name,ParentId=x.ParentId,Color=x.Color}).ToList(),Draft=current.Draft,SelectedTopic=current.SelectedTopic,SchemaVersion=current.SchemaVersion,SortOrder=current.SortOrder,KindFilter=current.KindFilter,OnlyOpen=current.OnlyOpen,Sound=current.Sound,LegacyImported=current.LegacyImported,Width=current.Width,Height=current.Height};
   foreach(var t in incoming.Topics)if(!candidate.Topics.Any(x=>x.Id==t.Id))candidate.Topics.Add(new Topic{Id=t.Id,Name=t.Name,ParentId=t.ParentId,Color=t.Color});
   foreach(var note in incoming.Notes)if(!candidate.Notes.Any(x=>x.Id==note.Id))candidate.Notes.Add(note.Clone());
   Normalize(candidate);return candidate;

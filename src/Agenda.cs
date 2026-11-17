@@ -36,34 +36,11 @@ partial class Wall {
     void PlannerNavigation() {
         foreach(var id in new[]{"$week","$month","$pending"}) {
             string label=id=="$week"?"本周看板":id=="$month"?"月历":"待查看提醒    "+Model.Due(Data,DateTime.UtcNow).Count;
-            var button=UI.Button(label,delegate {
+            var button=NavButton(id,id=="$week"?"本周看板":id=="$month"?"月历":"待查看提醒",id=="$pending"?Model.Due(Data,DateTime.UtcNow).Count:-1,delegate {
                 if(!Current.StartsWith("$"))scheduleTopic=Current;
                 anchor=DateTime.Today;Select(id);
-            },false);
-            button.BorderThickness=new Thickness(0);
-            button.Background=Current==id?UI.B("#E7E7E4"):Brushes.Transparent;
+            });
             nav.Children.Add(button);
-        }
-    }
-    void AddProgressAndMaterials(StackPanel panel,Note note) {
-        if(note.Deleted)return;
-        if(note.Steps.Count>0) {
-            var next=note.Steps.FirstOrDefault(x=>!x.Done);
-            var action=UI.Button(next==null && !note.Done?"完成整张便签":Planner.Progress(note),delegate {
-                if(note.Done)return;
-                if(next==null)note.Done=true;else next.Done=true;
-                Save();RenderAll();
-            },false);
-            action.ToolTip=next==null?"确认整张任务完成":"点击勾选下一步";
-            action.MinHeight=24;action.Padding=new Thickness(3);panel.Children.Add(action);
-        }
-        if(note.Materials.Count>0) {
-            var button=UI.Button("资料入口  "+note.Materials.Count,delegate(object sender,RoutedEventArgs e){
-                var menu=new ContextMenu();
-                foreach(var link in note.Materials)AddMenu(menu,link.Name,delegate{DetailControls.Open(link);});
-                ((Button)sender).ContextMenu=menu;menu.IsOpen=true;
-            },false);
-            button.MinHeight=22;button.Padding=new Thickness(3);panel.Children.Add(button);
         }
     }
     bool RenderPlanner() {
@@ -102,7 +79,7 @@ partial class Wall {
             }
             for(int day=0;day<7;day++){
                 var date=monday.AddDays(day);var section=new StackPanel{Margin=new Thickness(8)};
-                var block=new Border{Child=section,Background=date==DateTime.Today?UI.B("#EAF4F0"):Brushes.White,Margin=new Thickness(0,3,0,3)};
+                var block=new Border{Child=section,Background=date==DateTime.Today?UI.B("#EAF4F0"):Brushes.White,Margin=new Thickness(0,4,0,4),CornerRadius=new CornerRadius(10)};
                 panel.Children.Add(block);
                 section.Children.Add(UI.Text(date.ToString("MM/dd")+"  "+"周"+"一二三四五六日"[day]+(date==DateTime.Today?" · 今天":""),15,UI.Ink));
                 var events=Planner.Day(notes,date);
@@ -134,8 +111,8 @@ partial class Wall {
         string progress=Planner.Progress(note);
         if(!compact && progress!="")caption+="  "+progress;
         var button=UI.Button(caption,delegate{EditNote(note,false);},false);
-        button.Content=new TextBlock{Text=compact?note.Title:caption,TextTrimming=TextTrimming.CharacterEllipsis};
-        if(compact){var label=new StackPanel();var name=(TextBlock)button.Content;button.Content=null;label.Children.Add(name);button.Content=label;label.Children.Add(new TextBlock{Text=path,FontSize=10,Foreground=UI.Muted,TextTrimming=TextTrimming.CharacterEllipsis});}
+        button.HorizontalContentAlignment=HorizontalAlignment.Stretch;button.Content=new TextBlock{Text=compact?note.Title:caption,TextTrimming=TextTrimming.CharacterEllipsis};
+        if(compact){var label=new StackPanel();var name=(TextBlock)button.Content;button.Content=null;label.Children.Add(name);button.Content=label;label.Children.Add(new TextBlock{Text=path,FontSize=11,Foreground=UI.Muted,TextTrimming=TextTrimming.CharacterEllipsis});}
         button.Background=WallUI.Paper(Planner.Color(Data,note.TopicId,note.Color));button.BorderThickness=new Thickness(0);
         button.MinHeight=compact?22:30;button.Padding=new Thickness(4);button.Margin=new Thickness(0,2,2,1);
         button.ToolTip=caption;return button;

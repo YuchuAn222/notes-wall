@@ -68,6 +68,49 @@ static class Checks {
     check(restored.Steps.Count==4&&restored.Materials.Count==2&&restored.Materials[0].Target==path&&restored.Alarms.Count==3&&restored.Alarms[0].Acknowledged,"XML round trip restores checklist, source paths and independent reminder states");
    }finally{wall.Data.Notes.Remove(test);wall.Data.Topics.Remove(contest);wall.Select("$all");}
  }
+ static void VerifyExperience(Wall wall,string dir,Action<bool,string> check){
+  var oldNotes=wall.Data.Notes;string oldSort=wall.Data.SortOrder,oldKind=wall.Data.KindFilter;bool oldOpen=wall.Data.OnlyOpen;
+  wall.Data.Notes=new List<Note>();
+  try{
+   string course=wall.Data.Topics.First(t=>t.Name=="机器学习").Id;
+   var exam=new Note{Title="机器学习 · 期中复习",Body="先把线性模型和神经网络串起来，再做一套练习。",TopicId=course,Color="blue",Kind="考试",DueUtc=DateTime.Today.AddHours(19).ToUniversalTime()};
+   exam.Steps.Add(new Step{Name="整理知识框架",Done=true});exam.Steps.Add(new Step{Name="完成章节练习"});exam.Steps.Add(new Step{Name="回看错题"});
+   var contest=new Note{Title="设计比赛 · 提交作品",Body="最后核对作品说明和报名材料。",TopicId="contests",Color="yellow",Kind="比赛",DueUtc=DateTime.Today.AddDays(-1).AddHours(18).ToUniversalTime(),ReminderOn=true};
+   contest.Steps.Add(new Step{Name="确认参赛要求",Done=true});contest.Steps.Add(new Step{Name="导出作品文件",Done=true});contest.Steps.Add(new Step{Name="核对报名信息"});contest.Steps.Add(new Step{Name="提交并保存回执"});
+   contest.Materials.Add(new Material{Name="报名官网",Target="https://example.org/contest"});contest.Materials.Add(new Material{Name="作品目录",Target=@"C:\学习资料\参赛作品"});Planner.Schedule(contest,null,new[]{10080,1440,120});
+   var thought=new Note{Title="给下次讨论留个问题",Body="损失函数的选择，什么时候比模型结构更重要？",TopicId=course,Color="mint",Pinned=true};
+   var future=new Note{Title="实验报告 · 整理结果",Body="把训练曲线和结论放到一起。",TopicId=course,Kind="作业",Color="peach",DueUtc=DateTime.Today.AddDays(3).AddHours(20).ToUniversalTime()};
+   var finished=new Note{Title="本周资料已归档",TopicId="life",Color="stone",Done=true,DueUtc=DateTime.Today.AddHours(8).ToUniversalTime()};
+   wall.Data.Notes.AddRange(new[]{exam,contest,thought,future,finished});wall.Select("$today");
+   check(wall.WallNotes().Count==3 && !wall.WallNotes().Contains(future)&&!wall.WallNotes().Contains(finished),"Today includes due, overdue and pinned open tasks without future or completed tasks");
+   wall.Select("$all");wall.Search.Text="保存回执";check(wall.WallNotes().Single()==contest,"Search finds a checklist step");wall.Search.Text="报名官网";check(wall.WallNotes().Single()==contest,"Search finds a named material");wall.Search.Clear();
+   wall.OpenOnly.IsChecked=true;wall.OpenOnly.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));wall.TypeFilter.SelectedItem="考试";
+   check(wall.WallNotes().Single()==exam,"Open-only and kind filters combine");wall.Select("$done");wall.TypeFilter.SelectedItem="全部类型";check(wall.WallNotes().Single()==finished,"Completed view is not suppressed by open-only preference");
+   wall.Select("$all");WallUI.Choose(wall.SortBox,"due");check(wall.WallNotes().First()==contest,"Due-first sort puts the overdue competition before undated pinned notes");
+   wall.Save();var restored=wall.Storage.Load();check(restored.OnlyOpen&&restored.SortOrder=="due"&&restored.KindFilter=="全部类型","Filters and sorting survive XML reload");
+   wall.Width=1160;wall.Height=820;wall.Select("$today");wall.UpdateLayout();
+   var card=wall.Cards.Children.OfType<Border>().First(x=>(string)x.Tag==contest.Id);
+   var step=Desc<CheckBox>(card).First(x=>System.Windows.Automation.AutomationProperties.GetName(x)=="步骤：核对报名信息");step.IsChecked=true;step.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+   check(contest.Steps[2].Done&&!contest.Done&&Planner.Progress(contest).Contains("提交并保存回执"),"Inline checklist click saves progress and advances next step without completing the task");
+   check(wall.Storage.Load().Notes.First(x=>x.Id==contest.Id).Steps[2].Done,"Inline checklist change persists immediately");
+   foreach(int width in new[]{1160,960,780}){
+    wall.Width=width;wall.Height=width==780?640:820;wall.UpdateLayout();UI.Capture((FrameworkElement)wall.Content,System.IO.Path.Combine(dir,"study-"+width+".png"));
+    check(wall.Cards.Children.OfType<Border>().All(c=>c.ActualWidth<=wall.Cards.ActualWidth),"Paper cards fit viewport at "+width+" pixels");
+   }
+   wall.Width=1160;wall.Height=820;wall.Select("$all");wall.UpdateLayout();UI.Capture((FrameworkElement)wall.Content,System.IO.Path.Combine(dir,"study-all.png"));
+   var editor=new NoteEditor(wall.Data,contest,"contests","","比赛","yellow"){Owner=wall};
+   editor.Loaded+=delegate{editor.Width=520;editor.Height=600;editor.UpdateLayout();
+    for(int i=0;i<3;i++){editor.Tabs.SelectedIndex=i;editor.UpdateLayout();UI.Capture((FrameworkElement)editor.Content,System.IO.Path.Combine(dir,"study-editor-"+i+".png"));}
+    var bounds=editor.SaveButton.TransformToAncestor((FrameworkElement)editor.Content).TransformBounds(new Rect(editor.SaveButton.RenderSize));
+    check(bounds.Bottom<=((FrameworkElement)editor.Content).ActualHeight+1 && bounds.Right<=((FrameworkElement)editor.Content).ActualWidth+1,"Save stays visible on every editor tab at 520 x 600");
+    editor.SaveButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));};
+   check(editor.ShowDialog()==true&&editor.Result.Steps.Count==4&&editor.Result.Materials.Count==2&&editor.Result.Alarms.Count==3,"Tabbed editor saves existing steps, materials and three reminders");
+   wall.UpdateLayout();card=wall.Cards.Children.OfType<Border>().First(x=>(string)x.Tag==contest.Id);
+   var more=Desc<Button>(card).First(x=>x.Content as string=="···");more.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));var copyAction=more.ContextMenu.Items.OfType<MenuItem>().First(x=>(string)x.Header=="复制便签");more.ContextMenu.IsOpen=false;copyAction.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+   var copy=wall.Data.Notes.Last();check(copy.Id!=contest.Id&&copy.Title.Contains("副本")&&copy.Materials.Count==2&&copy.Steps.All(x=>!x.Done)&&!copy.ReminderOn&&!copy.DueUtc.HasValue&&copy.Alarms.Count==0,"Copy reuses materials and steps with a new identity and no stale deadlines or alarms");
+   copy.Steps[0].Name="新作业步骤";check(contest.Steps[0].Name=="确认参赛要求","Copied steps are independent of the original");
+  }finally{wall.Data.Notes=oldNotes;wall.Data.SortOrder=oldSort;wall.Data.KindFilter=oldKind;wall.Data.OnlyOpen=oldOpen;wall.OpenOnly.IsChecked=oldOpen;wall.TypeFilter.SelectedItem=oldKind;WallUI.Choose(wall.SortBox,oldSort);wall.Select("$all");}
+ }
  public static int Visual(string dir){
   Directory.CreateDirectory(dir);var report=new List<string>();int code=0;var app=new Application{ShutdownMode=ShutdownMode.OnExplicitShutdown};app.DispatcherUnhandledException+=delegate(object sender,DispatcherUnhandledExceptionEventArgs e){File.WriteAllText(Path.Combine(dir,"dispatcher-error.txt"),e.Exception.ToString());e.Handled=true;code=1;app.Shutdown();};var store=new Store(Path.Combine(dir,"ui-data"));var wall=new Wall(store,true);wall.Data.Notes.Clear();
   wall.Loaded+=delegate{wall.Dispatcher.BeginInvoke(new Action(delegate{try{
@@ -83,7 +126,7 @@ static class Checks {
    wall.Select(course.Id);wall.UpdateLayout();UI.Capture((FrameworkElement)wall.Content,Path.Combine(dir,"course.png"));wall.Select("$all");wall.Width=960;wall.Height=680;wall.UpdateLayout();UI.Capture((FrameworkElement)wall.Content,Path.Combine(dir,"medium.png"));wall.Width=780;wall.Height=600;wall.UpdateLayout();UI.Capture((FrameworkElement)wall.Content,Path.Combine(dir,"compact.png"));
    card=wall.Cards.Children.OfType<Border>().First(x=>(string)x.Tag==task.Id);var more=Desc<Button>(card).First(x=>x.Content as string=="···");more.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));var trash=more.ContextMenu.Items.OfType<MenuItem>().First(x=>(string)x.Header=="移到回收站");more.ContextMenu.IsOpen=false;trash.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));check(task.Deleted&&Model.Visible(wall.Data,"$trash","").Count==1,"Card menu moves note to recoverable trash");wall.Select("$trash");wall.UpdateLayout();card=wall.Cards.Children.OfType<Border>().First();var restore=Desc<Button>(card).First(x=>x.Content as string=="恢复");restore.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));check(!task.Deleted,"Restore button recovers trashed note");
    var alarm=new Note{Title="提醒窗口验证",TopicId=course.Id,Kind="作业",DueUtc=DateTime.UtcNow.AddHours(1),RemindUtc=DateTime.UtcNow.AddSeconds(-1),ReminderOn=true};wall.Data.Notes.Add(alarm);wall.CheckReminders();var popup=app.Windows.OfType<WallReminder>().First();popup.UpdateLayout();UI.Capture((FrameworkElement)popup.Content,Path.Combine(dir,"reminder.png"));var deadline=alarm.DueUtc;popup.SnoozeButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));check(alarm.DueUtc==deadline&&alarm.RemindUtc>DateTime.UtcNow.AddMinutes(9),"Reminder snooze button preserves original deadline");alarm.Alarms[0].At=DateTime.UtcNow.AddSeconds(-1);Planner.Sync(alarm);wall.CheckReminders();app.Windows.OfType<WallReminder>().First().DoneButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));check(alarm.Done,"Reminder complete button updates task");
-   VerifyPlanner(wall,dir,check);wall.Quick.Text="没有贴上墙的临时想法";check(wall.Save()&&store.Load().Draft==wall.Quick.Text,"Unposted draft persists to disk");check(store.Load().Notes.Count==7,"All note and category changes survive reload");
+   VerifyPlanner(wall,dir,check);VerifyExperience(wall,dir,check);wall.Quick.Text="没有贴上墙的临时想法";check(wall.Save()&&store.Load().Draft==wall.Quick.Text,"Unposted draft persists to disk");check(store.Load().Notes.Count==7,"All note and category changes survive reload");
   }catch(Exception ex){code=1;report.Add("FAIL "+ex);}finally{File.WriteAllLines(Path.Combine(dir,"ui-test.txt"),report,Encoding.UTF8);app.Shutdown();}}),DispatcherPriority.ApplicationIdle);};
   app.Run(wall);return code;
  }

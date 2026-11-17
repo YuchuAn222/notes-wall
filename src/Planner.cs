@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 
-[assembly: System.Reflection.AssemblyFileVersion("1.1.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.2.0.0")]
 
 public class Step {
     public string Name { get; set; }

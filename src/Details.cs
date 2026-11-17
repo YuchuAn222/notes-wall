@@ -21,9 +21,20 @@ static class DetailControls {
         return box;
     }
     static DataGrid GridFor(object rows) {
-        return new DataGrid { ItemsSource=(System.Collections.IEnumerable)rows, Height=110,
+        var grid=new DataGrid { ItemsSource=(System.Collections.IEnumerable)rows, Height=166,
             AutoGenerateColumns=false, CanUserAddRows=false, CanUserDeleteRows=false,
-            CanUserSortColumns=false, SelectionMode=DataGridSelectionMode.Single, HeadersVisibility=DataGridHeadersVisibility.Column };
+            CanUserSortColumns=false, SelectionMode=DataGridSelectionMode.Single, HeadersVisibility=DataGridHeadersVisibility.Column,
+            RowHeight=30, ColumnHeaderHeight=30, GridLinesVisibility=DataGridGridLinesVisibility.Horizontal,
+            HorizontalGridLinesBrush=UI.Line, BorderBrush=UI.Line, Background=System.Windows.Media.Brushes.White,
+            HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled, VerticalScrollBarVisibility=ScrollBarVisibility.Auto };
+        Action fit=delegate {
+            if(grid.ActualWidth<=0||grid.Columns.Count!=2)return;
+            double available=Math.Max(200,grid.ActualWidth-24);
+            double first=grid.Columns[0] is DataGridCheckBoxColumn?48:Math.Max(90,available*.32);
+            grid.Columns[0].Width=new DataGridLength(first);
+            grid.Columns[1].Width=new DataGridLength(Math.Max(120,available-first));
+        };
+        grid.SizeChanged+=delegate{fit();};grid.Loaded+=delegate{fit();};return grid;
     }
     static DataGridTextColumn Field(string title,string property) {
         return new DataGridTextColumn { Header=title, Binding=new Binding(property){UpdateSourceTrigger=UpdateSourceTrigger.PropertyChanged},

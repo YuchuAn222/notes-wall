@@ -15,6 +15,7 @@ dist/
 *.pdb
 *.user
 .vs/
+.taste-skill/
 
 # Local environments and credentials
 .env
